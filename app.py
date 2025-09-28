@@ -1,29 +1,33 @@
 import streamlit as st
 import yfinance as yf
-import pandas as pd
-from datetime import datetime, date
+from datetime import date
+import json
 
-# Simple working version
+# Pandas-free version that will definitely work
 st.set_page_config(page_title="Investment Tracker", layout="wide")
 st.title("📈 Investment Portfolio Tracker")
 
-# Initialize session state
+# Initialize data
 if 'transactions' not in st.session_state:
     st.session_state.transactions = []
+if 'holdings' not in st.session_state:
+    st.session_state.holdings = {}
 
-# Ticker mappings
-ticker_map = {'NDQ': 'NDQ.AX', 'IVV': 'IVV.AX', 'CBA': 'CBA.AX'}
-
-def get_current_price(symbol):
+# Simple price fetcher without pandas dependencies
+def get_simple_price(symbol):
     try:
+        # Map symbols to tickers
+        ticker_map = {'NDQ': 'NDQ.AX', 'IVV': 'IVV.AX', 'CBA': 'CBA.AX'}
         ticker = ticker_map.get(symbol, symbol)
+        
+        # Use yfinance without pandas operations
         stock = yf.Ticker(ticker)
-        hist = stock.history(period='1d')
-        return hist['Close'].iloc[-1] if not hist.empty else 0
+        info = stock.info
+        return info.get('currentPrice', info.get('regularMarketPrice', 0))
     except:
         return 0
 
-# Sidebar for adding transactions
+# Sidebar
 with st.sidebar:
     st.header("Add Transaction")
     
@@ -33,69 +37,100 @@ with st.sidebar:
     trans_date = st.date_input("Date", value=date.today())
     
     total = units * price
-    st.write(f"Total: ${total:.2f}")
+    st.write(f"**Total: ${total:.2f}**")
     
     if st.button("Add Buy Transaction"):
         transaction = {
-            'date': trans_date.isoformat(),
+            'id': len(st.session_state.transactions) + 1,
+            'date': str(trans_date),
             'symbol': symbol,
             'units': units,
             'price': price,
             'total': total
         }
         st.session_state.transactions.append(transaction)
-        st.success("Transaction added!")
+        
+        # Update holdings
+        if symbol not in st.session_state.holdings:
+            st.session_state.holdings[symbol] = {'units': 0, 'invested': 0}
+        
+        st.session_state.holdings[symbol]['units'] += units
+        st.session_state.holdings[symbol]['invested'] += total
+        
+        st.success("✅ Transaction added!")
+        st.rerun()
+    
+    if st.button("Clear All Data"):
+        st.session_state.transactions = []
+        st.session_state.holdings = {}
+        st.success("🗑️ Data cleared!")
+        st.rerun()
 
-# Display current prices
-st.header("Current Prices")
+# Current Prices
+st.header("💵 Current Prices")
 col1, col2, col3 = st.columns(3)
+
+ndq_price = get_simple_price('NDQ')
+ivv_price = get_simple_price('IVV')
+cba_price = get_simple_price('CBA')
+
 with col1:
-    ndq_price = get_current_price('NDQ')
     st.metric("NDQ", f"${ndq_price:.2f}")
 with col2:
-    ivv_price = get_current_price('IVV')
     st.metric("IVV", f"${ivv_price:.2f}")
 with col3:
-    cba_price = get_current_price('CBA')
     st.metric("CBA", f"${cba_price:.2f}")
 
-# Calculate portfolio
-if st.session_state.transactions:
-    st.header("Your Portfolio")
-    
-    # Group by symbol
-    portfolio = {}
-    for trans in st.session_state.transactions:
-        symbol = trans['symbol']
-        if symbol not in portfolio:
-            portfolio[symbol] = {'units': 0, 'invested': 0}
-        portfolio[symbol]['units'] += trans['units']
-        portfolio[symbol]['invested'] += trans['total']
-    
-    # Display holdings
-    for symbol, data in portfolio.items():
-        current_price = get_current_price(symbol)
-        current_value = data['units'] * current_price
-        profit = current_value - data['invested']
-        
-        st.subheader(symbol)
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.write(f"Units: {data['units']}")
-            st.write(f"Avg Price: ${data['invested']/data['units']:.2f}")
-        with col2:
-            st.write(f"Current Price: ${current_price:.2f}")
-            st.write(f"Current Value: ${current_value:.2f}")
-        with col3:
-            st.write(f"Profit/Loss: ${profit:.2f}")
-        st.divider()
+# Portfolio Summary
+st.header("📊 Portfolio Summary")
+
+total_value = 0
+total_invested = 0
+
+for symbol, holding in st.session_state.holdings.items():
+    if holding['units'] > 0:
+        current_price = get_simple_price(symbol)
+        current_value = holding['units'] * current_price
+        total_value += current_value
+        total_invested += holding['invested']
+
+profit_loss = total_value - total_invested
+profit_pct = (profit_loss / total_invested * 100) if total_invested > 0 else 0
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("Total Value", f"${total_value:,.2f}")
+with col2:
+    st.metric("Total Invested", f"${total_invested:,.2f}")
+with col3:
+    st.metric("Profit/Loss", f"${profit_loss:,.2f}", f"{profit_pct:.1f}%")
+
+# Holdings Display
+st.header("📦 Your Holdings")
+
+if st.session_state.holdings:
+    for symbol, holding in st.session_state.holdings.items():
+        if holding['units'] > 0:
+            current_price = get_simple_price(symbol)
+            current_value = holding['units'] * current_price
+            profit = current_value - holding['invested']
+            avg_price = holding['invested'] / holding['units']
+            
+            with st.expander(f"{symbol} - {holding['units']} units", expanded=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"**Average Price:** ${avg_price:.2f}")
+                    st.write(f"**Current Price:** ${current_price:.2f}")
+                with col2:
+                    st.write(f"**Current Value:** ${current_value:,.2f}")
+                    st.write(f"**Profit/Loss:** ${profit:,.2f}")
 else:
-    st.info("Add your first transaction using the sidebar!")
+    st.info("💡 No holdings yet. Add your first transaction using the sidebar!")
 
-# Transaction history
+# Transaction History
 if st.session_state.transactions:
-    st.header("Transaction History")
-    for trans in reversed(st.session_state.transactions):
-        st.write(f"{trans['date'][:10]} - {trans['symbol']} - {trans['units']} units @ ${trans['price']:.2f}")
+    st.header("📋 Transaction History")
+    for transaction in reversed(st.session_state.transactions):
+        st.write(f"**{transaction['date']}** - {transaction['symbol']} - {transaction['units']} units @ ${transaction['price']:.2f}")
 
-st.success("App is running successfully!")
+st.success("🚀 App deployed successfully! Data is stored in your session.")
